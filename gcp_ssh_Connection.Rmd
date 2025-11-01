@@ -1,0 +1,102 @@
+---
+title: "How to Generate SSH Keys and Connect to GCP VM"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-11-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Option 1: Add a New SSH Key via Google Cloud Console
+
+A. Generate SSH Key Pair on Your Local Machine
+
+Open your terminal and run:
+
+```{bash}
+ssh-keygen -t rsa -f ~/.ssh/my_new_gcp_key -C your_email@example.com
+```
+
+This creates:
+
+```         
+    Private key: ~/.ssh/my_new_gcp_key
+
+    Public key: ~/.ssh/my_new_gcp_key.pub
+```
+
+B. Add Your Public Key to the VM
+
+```         
+1. Go to Google Cloud Console > Compute Engine > VM Instances.
+
+2. Click the instance name of your VM.
+
+3. Click Edit (top).
+
+4. Scroll down to SSH Keys.
+
+5. Open ~/.ssh/my_new_gcp_key.pub in a text editor (cat ~/.ssh/my_new_gcp_key.pub) and copy its contents.
+
+6. Paste the public key into the SSH Keys section.
+
+7. Click Save.
+```
+
+C. Connect to the VM Using the New Key
+
+```{bash}
+ssh -i ~/.ssh/my_new_gcp_key your_gcp_username@EXTERNAL_IP
+```
+
+```         
+The default username is usually your local account or the one prefixed to your public key comment.
+```
+
+D. Download Files from the VM
+
+```{bash}
+scp -i ~/.ssh/my_new_gcp_key your_gcp_username@EXTERNAL_IP:~/file.csv ~/Downloads/
+```
+
+Or entire directories:
+
+```{bash}
+scp -i ~/.ssh/my_new_gcp_key -r your_gcp_username@EXTERNAL_IP:~/your_folder ~/Downloads/
+```
+
+## Option 2: Use "SSH in Browser" and Transfer Files to Google Cloud Storage
+
+1.  In the Google Cloud Console, click SSH next to your VM name to open a browser terminal.
+
+2.  Run:
+
+```{bash}
+gsutil cp ~/file.csv gs://YOUR-BUCKET/
+```
+
+3.  On your local machine, use the Cloud Console UI to download from your GCS bucket OR use gsutil:
+
+```{bash}
+gsutil cp gs://YOUR-BUCKET/file.csv ~/Downloads/
+```
+
+## Option 3: Reset SSH Keys via gcloud (If You Have Admin Rights)
+
+```{bash}
+gcloud compute instances add-metadata YOUR_INSTANCE_NAME --zone=YOUR_ZONE \
+  --metadata-from-file ssh-keys=~/.ssh/my_new_gcp_key.pub
+```
+
+Tips
+
+```         
+Always keep your private key secure and never share it.
+
+Remove any old public keys from GCP if you no longer want them to have access.
+
+Google’s “SSH in browser” and the “Download file” options (from the browser shell) are convenient for small files.
+```
