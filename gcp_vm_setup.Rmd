@@ -1,0 +1,156 @@
+---
+title: "Create a Compute Engine VM on Google Cloud"
+author: "Prepared for Saleembhasha Asanigari"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+  pdf_document: default
+---
+
+> This R Markdown file walks you through creating a Google Cloud **Compute Engine** VM via **Console (UI)**, **gcloud CLI**, and **Terraform**. It includes copy‑paste‑ready commands.
+
+# Prerequisites
+
+- A Google Cloud project (with billing enabled)
+- Basic terminal access
+- (Optional) Google Cloud SDK (`gcloud`) installed locally
+- (Optional) Terraform installed locally
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(comment = "#>", collapse = TRUE)
+```
+
+# Method 1: Google Cloud Console (UI)
+
+1. Open: <https://console.cloud.google.com/>
+2. Select or create a project.
+3. Navigate: **Compute Engine → VM instances → Create Instance**.
+4. Configure:
+   - **Name**: `my-vm-instance`
+   - **Region & Zone**: e.g., `us-central1-a`
+   - **Machine type**: `e2-medium` (2 vCPU, 4 GB RAM)
+   - **Boot disk**: Ubuntu 22.04 LTS, size 50 GB
+   - **Firewall**: optionally allow **HTTP** and **HTTPS**
+5. Click **Create**.
+6. Connect via **SSH** button next to the instance name.
+
+# Method 2: gcloud CLI
+
+## Authenticate and set project
+
+```{bash}
+gcloud auth login
+gcloud config set project <YOUR_PROJECT_ID>
+```
+
+## Create an Ubuntu 22.04 VM
+
+```{bash}
+gcloud compute instances create my-vm-instance   --zone=us-central1-a   --machine-type=e2-medium   --image-project=ubuntu-os-cloud   --image-family=ubuntu-2204-lts   --boot-disk-size=50GB   --tags=http-server,https-server
+```
+
+## SSH into the instance
+
+```{bash}
+gcloud compute ssh my-vm-instance --zone=us-central1-a
+```
+
+## (Optional) Add a startup script
+
+This example updates packages and installs **Nginx** on first boot.
+
+```{bash}
+gcloud compute instances create web-vm   --zone=us-central1-a   --machine-type=e2-medium   --image-project=ubuntu-os-cloud   --image-family=ubuntu-2204-lts   --boot-disk-size=20GB   --tags=http-server,https-server   --metadata startup-script='apt-get update -y && apt-get install -y nginx'
+```
+
+## (Optional) GPU example (T4)
+
+> Requires a GPU‑compatible zone and GPU quota.
+
+```{bash}
+gcloud compute instances create gpu-vm   --zone=us-central1-a   --machine-type=n1-standard-8   --accelerator type=nvidia-tesla-t4,count=1   --image-family=ubuntu-2204-lts   --image-project=ubuntu-os-cloud   --maintenance-policy=TERMINATE   --boot-disk-size=100GB
+```
+
+# Method 3: Terraform (reproducible IaC)
+
+Create a file named **`main.tf`** with the following content:
+
+```{hcl}
+provider "google" {
+  project = "<YOUR_PROJECT_ID>"
+  region  = "us-central1"
+  zone    = "us-central1-a"
+}
+
+resource "google_compute_instance" "vm_instance" {
+  name         = "my-vm-instance"
+  machine_type = "e2-medium"
+
+  boot_disk {
+    initialize_params {
+      image = "ubuntu-os-cloud/ubuntu-2204-lts"
+      size  = 50
+    }
+  }
+
+  network_interface {
+    network = "default"
+    access_config {}
+  }
+
+  tags = ["http-server", "https-server"]
+}
+```
+
+Then initialize and apply:
+
+```{bash}
+terraform init
+terraform apply
+```
+
+Confirm with `yes` when prompted.
+
+# Useful Add-ons
+
+## Create and attach a persistent disk
+
+```{bash}
+# Create a 200 GB SSD persistent disk
+gcloud compute disks create data-disk-1   --size=200GB --type=pd-ssd --zone=us-central1-a
+
+# Attach it to the instance
+gcloud compute instances attach-disk my-vm-instance   --disk=data-disk-1 --zone=us-central1-a
+
+# On the VM, format and mount (example)
+# sudo mkfs.ext4 -F /dev/disk/by-id/google-data-disk-1
+# sudo mkdir -p /mnt/data && sudo mount /dev/disk/by-id/google-data-disk-1 /mnt/data
+# echo '/dev/disk/by-id/google-data-disk-1 /mnt/data ext4 defaults 0 2' | sudo tee -a /etc/fstab
+```
+
+## Opening firewall for HTTP/HTTPS (if not set)
+
+```{bash}
+gcloud compute firewall-rules create allow-http --allow tcp:80 --target-tags=http-server
+gcloud compute firewall-rules create allow-https --allow tcp:443 --target-tags=https-server
+```
+
+# Notes for Bioinformatics Workloads
+
+- Choose a larger machine type (e.g., `n2-standard-16`, `n2-highmem-32`) for heavy NGS/ML tasks.
+- Consider **Local SSD** for high IOPS scratch, and **pd-balanced / pd-ssd** for persistent storage.
+- Use **startup scripts** or **Ansible** to bootstrap R, Python, and packages (Seurat, Scanpy, CUDA/cuDNN for GPU).
+
+# Clean Up
+
+```{bash}
+# Delete instance
+gcloud compute instances delete my-vm-instance --zone=us-central1-a
+
+# (Optional) Delete disks and firewall rules
+gcloud compute disks delete data-disk-1 --zone=us-central1-a
+gcloud compute firewall-rules delete allow-http allow-https
+```

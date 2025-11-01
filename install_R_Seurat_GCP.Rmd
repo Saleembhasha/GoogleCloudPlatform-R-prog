@@ -1,0 +1,194 @@
+---
+title: "Install Latest R & Seurat on GCP Debian VM (Single-Cell Ready)"
+author: "Prepared for Saleembhasha Asanigari"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+  pdf_document: default
+---
+
+This guide installs the **latest R** from CRAN on a **Google Cloud Compute Engine** VM running **Debian GNU/Linux**, and prepares it for **Seurat v5** single‑cell analysis. It uses the **modern CRAN keyring** method (no deprecated `apt-key`).
+
+> Tested on **Debian 12 (bookworm)**. If you are on Debian 11 (bullseye), replace `bookworm-cran40` with `bullseye-cran40` below.
+
+# 0) Update VM & Essentials
+
+```{bash}
+# connect to the VM via SSH, then:
+sudo apt update
+sudo apt -y upgrade
+
+# build tools and helpers
+sudo apt -y install --no-install-recommends \
+  build-essential software-properties-common apt-transport-https ca-certificates \
+  gnupg wget curl git
+```
+
+# 1) Add the official CRAN repo for Debian (to get the newest R)
+
+```{bash}
+# import CRAN Debian key (Johannes Ranke)
+gpg --keyserver keyserver.ubuntu.com --recv-key 95C0FAF38DB3CCAD0C080A7BDC78B2DDEABC47B7
+gpg --armor --export 95C0FAF38DB3CCAD0C080A7BDC78B2DDEABC47B7 | \
+  sudo tee /etc/apt/trusted.gpg.d/cran_debian_key.asc
+
+# add CRAN's Debian repository for 'bookworm'
+echo "deb http://cloud.r-project.org/bin/linux/debian bookworm-cran40/" | \
+  sudo tee /etc/apt/sources.list.d/cran-r.list
+
+sudo apt update
+```
+
+# 2) Install R (Base + Dev) and System Libraries
+
+```{bash}
+sudo apt install -y r-base r-base-dev
+
+# Common system libs needed by many R/Seurat deps
+sudo apt -y install --no-install-recommends \
+  libcurl4-openssl-dev libssl-dev libxml2-dev \
+  libfontconfig1-dev libharfbuzz-dev libfribidi-dev \
+  libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev \
+  zlib1g-dev libbz2-dev liblzma-dev libreadline-dev \
+  libpcre2-dev libopenblas-dev liblapack-dev gfortran cmake
+
+# (Optional) Fonts for plotting
+sudo apt install -y fonts-dejavu
+```
+
+Verify R:
+
+```{bash}
+R --version
+```
+
+# 3) Persist Personal R Library (Avoid Permission Issues)
+
+System library is often not writable for normal users. Persist a user library path and make R use it by default.
+
+```{bash}
+# Set a persistent user library for R 4.4+ (adjust if R version differs)
+echo 'R_LIBS_USER=~/R/x86_64-pc-linux-gnu-library/4.4' >> ~/.Renviron
+mkdir -p ~/R/x86_64-pc-linux-gnu-library/4.4
+```
+
+# 4) Install Seurat v5 and Core Dependencies (in R)
+
+```{r}
+# Use a reliable CRAN mirror
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+# Install Seurat and common deps
+install.packages(c(
+  "Seurat", "SeuratObject", "Matrix",
+  "harmony", "tidyverse",
+  "future", "future.apply",
+  "dplyr", "ggplot2", "data.table",
+  "patchwork", "cowplot", "hdf5r"
+))
+
+# Verify
+library(Seurat)
+sessionInfo()
+```
+
+# 5) Optional: Bioconductor Ecosystem
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+BiocManager::install(c(
+  "SingleCellExperiment", "scran", "scater", "batchelor"
+))
+```
+
+# 6) Parallel & Memory Tuning for Seurat
+
+```{r}
+library(future)
+
+# Use all but one core
+plan("multicore", workers = max(1L, parallel::detectCores() - 1L))
+
+# Increase future's object size limit (e.g., 20 GB)
+options(future.globals.maxSize = 20 * 1024^3)
+```
+
+# 7) Quick Sanity Check
+
+```{r}
+library(Seurat)
+
+# Tiny synthetic object
+set.seed(1)
+mat <- matrix(rpois(2000, 10), nrow = 200, ncol = 10,
+              dimnames = list(paste0("g", 1:200), paste0("c", 1:10)))
+obj <- CreateSeuratObject(counts = mat)
+obj <- NormalizeData(obj)
+obj <- FindVariableFeatures(obj)
+obj <- ScaleData(obj, verbose = FALSE)
+obj <- RunPCA(obj, verbose = FALSE)
+ElbowPlot(obj)
+```
+
+# 8) (Optional) RStudio Server on Debian
+
+```{bash}
+# Download Posit RStudio (adjust for latest release if needed)
+wget https://download1.rstudio.org/electron/jammy/amd64/rstudio-2024.04.0-735-amd64.deb
+
+# Install
+sudo apt install -y gdebi-core
+sudo gdebi -n rstudio-2024.04.0-735-amd64.deb
+
+# Open firewall port 8787 if needed (GCP: add VPC firewall rule to allow TCP:8787)
+```
+
+Access: `http://EXTERNAL_IP:8787` (use your VM user & password).
+
+# 9) (Optional) Python/Scanpy Interop
+
+```{bash}
+sudo apt install -y python3-pip python3-venv
+pip install --upgrade pip
+pip install scanpy anndata h5py pandas numpy
+```
+
+```{r}
+library(reticulate)
+use_python("/usr/bin/python3", required = TRUE)
+```
+
+# 10) Troubleshooting Cheatsheet
+
+**Non‑writable library**  
+- Symptom: `lib = "/usr/local/lib/R/site-library" is not writable`  
+- Fix: Set `R_LIBS_USER` in `~/.Renviron` (Step 3) and pass `lib=...` explicitly if needed:  
+  `install.packages("Seurat", lib="~/R/x86_64-pc-linux-gnu-library/4.4")`
+
+**Matrix / Seurat dependency mismatch**  
+- Symptom: "Matrix >= 1.6.4 required" or similar  
+- Fix: Ensure latest R (Step 1–2). Then in R: `install.packages("Matrix")`
+
+**SSL/curl errors during install**  
+- Fix: `sudo apt install -y libcurl4-openssl-dev libssl-dev`
+
+**Out‑of‑memory (OOM) on big datasets**  
+- Use larger machine types (e.g., `n2-highmem-32`), or reduce features/cells pre‑QC  
+- Use `future` with fewer workers; increase swap or use larger pd-ssd
+
+# 11) Good GCP Practices for Single‑Cell
+
+- Choose a region close to your data (e.g., `asia-south1` for India work).  
+- Use **pd-ssd** for faster I/O on large matrices.  
+- Stage big inputs on **Cloud Storage** (`gcloud storage cp`) and mount to VM.  
+- Snapshot disks before major upgrades.
+
+---
+
+**Done!** You now have a Debian GCP VM ready for **Seurat single‑cell analysis** with the latest R.

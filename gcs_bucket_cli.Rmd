@@ -1,0 +1,206 @@
+---
+title: "Create & Manage Google Cloud Storage Buckets via CLI"
+author: "Prepared for Saleembhasha Asanigari"
+date: "November 01, 2025"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+  pdf_document: default
+---
+
+This R Markdown provides **copy‑paste‑ready** commands to create and manage **Google Cloud Storage (GCS)** buckets using the **gcloud** CLI (the modern `gcloud storage` surface).
+
+> Tested on Ubuntu (GCP VM). Replace placeholder values like `<YOUR_PROJECT_ID>` and `my-bucket-name` before running.
+
+# Prerequisites
+
+```{bash}
+# Install Google Cloud SDK if needed (Ubuntu)
+# See: https://cloud.google.com/sdk/docs/install
+
+# Authenticate and set your project
+gcloud auth login
+gcloud config set project <YOUR_PROJECT_ID>
+
+# (Optional) set default region/zone for convenience
+gcloud config set compute/region us-central1
+gcloud config set compute/zone us-central1-a
+
+# Check active config
+gcloud config list
+```
+
+# Create a Bucket
+
+Bucket names must be **globally unique**, 3–63 characters, lowercase letters/digits/dashes.
+
+```{bash}
+# Basic bucket in a single region
+gcloud storage buckets create gs://my-bucket-name   --location=us-central1   --default-storage-class=STANDARD
+```
+
+## Recommended: Uniform Bucket-Level Access (UBLA)
+
+UBLA simplifies permissions to IAM-only and disables object-level ACLs.
+
+```{bash}
+gcloud storage buckets create gs://my-bucket-name   --location=us-east1   --default-storage-class=NEARLINE   --uniform-bucket-level-access
+```
+
+# List & Inspect
+
+```{bash}
+# List all buckets in the project
+gcloud storage buckets list
+
+# Show bucket metadata
+gcloud storage buckets describe gs://my-bucket-name
+```
+
+# Upload & Download Data
+
+```{bash}
+# Upload a single file
+gcloud storage cp ./sample_data.csv gs://my-bucket-name/
+
+# Upload a directory recursively
+gcloud storage cp -r ./data/ gs://my-bucket-name/data/
+
+# Download from bucket
+gcloud storage cp gs://my-bucket-name/sample_data.csv ./
+```
+
+# IAM Permissions
+
+Grant users/groups/service accounts roles on the bucket.
+
+```{bash}
+# Grant Storage Admin to a specific user
+gcloud storage buckets add-iam-policy-binding gs://my-bucket-name   --member="user:asanigaris@nih.gov"   --role="roles/storage.admin"
+
+# View the IAM policy
+gcloud storage buckets get-iam-policy gs://my-bucket-name
+```
+
+## (Optional) Public Read for Objects (Use with care)
+
+```{bash}
+gcloud storage buckets add-iam-policy-binding gs://my-bucket-name   --member="allUsers"   --role="roles/storage.objectViewer"
+```
+
+# Bucket Features
+
+## Versioning
+
+Keep historical versions of objects (helpful for accidental deletes/overwrites).
+
+```{bash}
+# Enable versioning
+gcloud storage buckets update gs://my-bucket-name --versioning
+
+# Disable versioning
+gcloud storage buckets update gs://my-bucket-name --no-versioning
+```
+
+## Lifecycle Rules
+
+Automate transitions (e.g., move to NEARLINE after 30 days, delete after 365).
+
+```{bash}
+# Example lifecycle JSON (save as lifecycle.json)
+cat > lifecycle.json <<'JSON'
+{
+  "rule": [
+    {
+      "action": {"type": "SetStorageClass", "storageClass": "NEARLINE"},
+      "condition": {"age": 30}
+    },
+    {
+      "action": {"type": "Delete"},
+      "condition": {"age": 365}
+    }
+  ]
+}
+JSON
+
+# Apply lifecycle
+gcloud storage buckets update gs://my-bucket-name --lifecycle-file=lifecycle.json
+
+# Show lifecycle
+gcloud storage buckets describe gs://my-bucket-name | grep lifecycle -A 10
+```
+
+## Object Retention Policy (WORM)
+
+Prevents deletion/modification for a defined period (useful for compliance).
+
+```{bash}
+# Set a 30-day retention period
+gcloud storage buckets update gs://my-bucket-name --retention-period=2592000
+
+# Get retention policy
+gcloud storage buckets describe gs://my-bucket-name | grep retention -A 5
+```
+
+## Customer-Managed Encryption Keys (CMEK)
+
+Encrypt data at rest with a Cloud KMS key.
+
+```{bash}
+# Example: set a CMEK (replace with your KMS key resource)
+gcloud storage buckets update gs://my-bucket-name   --default-encryption-key=projects/<PROJECT>/locations/<LOCATION>/keyRings/<RING>/cryptoKeys/<KEY>
+```
+
+## CORS (for web apps)
+
+Allow browser-based uploads/reads from specific origins.
+
+```{bash}
+# Example CORS (save as cors.json)
+cat > cors.json <<'JSON'
+[
+  {
+    "origin": ["https://example.com"],
+    "method": ["GET", "PUT", "POST"],
+    "responseHeader": ["Content-Type"],
+    "maxAgeSeconds": 3600
+  }
+]
+JSON
+
+# Apply CORS
+gcloud storage buckets update gs://my-bucket-name --cors-file=cors.json
+```
+
+# Clean Up
+
+```{bash}
+# Remove a folder/object prefix recursively
+gcloud storage rm -r gs://my-bucket-name/data/
+
+# Delete entire bucket (must be empty or use -r)
+gcloud storage rm -r gs://my-bucket-name
+```
+
+# Quick Bioinformatics Example
+
+```{bash}
+# Upload Seurat object and count matrices
+gcloud storage cp ./seurat_obj.rds gs://my-bucket-name/seurat/
+gcloud storage cp -r ./counts/ gs://my-bucket-name/rnaseq_counts/
+```
+
+# Mount the bucket and read it directly
+
+```{bash}
+# Mount your bucket
+sudo bash -c 'set -e; BUCKET=gse253557; MNT=/mnt/gcs; . /etc/os-release; CODENAME="${VERSION_CODENAME:-$(lsb_release -sc 2>/dev/null || echo bookworm)}"; mkdir -p /usr/share/keyrings; curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | tee /usr/share/keyrings/cloud.google.asc >/dev/null; echo "deb [signed-by=/usr/share/keyrings/cloud.google.asc] https://packages.cloud.google.com/apt gcsfuse-$CODENAME main" > /etc/apt/sources.list.d/gcsfuse.list; apt-get update; apt-get install -y gcsfuse; mkdir -p "$MNT"; gcsfuse --implicit-dirs --temp-dir=/dev/shm "$BUCKET" "$MNT"; ls -lh "$MNT"'
+```
+
+# Notes
+
+- Prefer **regional** buckets close to your VMs (e.g., `asia-south1` for India, `us-east1` for many US datasets).
+- Use **NEARLINE/COLDLINE/ARCHIVE** for infrequently accessed data to save cost.
+- For high-throughput transfers, consider `gcloud storage --threads=N` or parallel strategies.
